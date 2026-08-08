@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,14 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/microsoft/go-mssqldb"
-	"github.com/redis/go-redis/v9"
-
 	"github.com/lexa044/realtime-api/internal/adapter/broker"
 	httpadapter "github.com/lexa044/realtime-api/internal/adapter/http"
 	"github.com/lexa044/realtime-api/internal/adapter/repository"
 	"github.com/lexa044/realtime-api/internal/adapter/ws"
 	"github.com/lexa044/realtime-api/internal/infrastructure/config"
+	infradb "github.com/lexa044/realtime-api/internal/infrastructure/db"
 	"github.com/lexa044/realtime-api/internal/usecase"
 )
 
@@ -30,33 +27,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := sql.Open("sqlserver", cfg.MSSQLDSN)
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer startupCancel()
+
+	db, err := infradb.NewMSSQL(startupCtx, cfg.MSSQLDSN)
 	if err != nil {
-		log.Fatalf("mssql open: %v", err)
+		log.Fatalf("mssql: %v", err)
 	}
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	defer db.Close()
 
-	// sql.Open only validates DSN syntax — it does not connect. Ping here
-	// so a bad host/port/credential fails fast at startup instead of on
-	// the first request that happens to hit the database.
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer pingCancel()
-	if err := db.PingContext(pingCtx); err != nil {
-		log.Fatalf("mssql ping: %v", err)
+	rdb, err := infradb.NewRedis(startupCtx, cfg.RedisAddr, cfg.RedisPass)
+	if err != nil {
+		log.Fatalf("redis: %v", err)
 	}
-
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPass,
-	})
-
-	redisPingCtx, redisPingCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer redisPingCancel()
-	if err := rdb.Ping(redisPingCtx).Err(); err != nil {
-		log.Fatalf("redis ping: %v", err)
-	}
+	defer rdb.Close()
 
 	// Wiring: adapters -> usecases -> handlers. Dependencies point inward;
 	// this is the ONLY place that knows about every concrete type.
@@ -103,7 +87,4 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	srv.Shutdown(shutdownCtx)
-	db.Close()
-	rdb.Close()
 }
-

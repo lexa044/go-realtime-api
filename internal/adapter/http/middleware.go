@@ -8,12 +8,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/lexa044/realtime-api/internal/adapter/ws"
+	"github.com/lexa044/realtime-api/internal/contextutil"
 )
-
-type contextKey string
-
-const ctxKeyClaims contextKey = "claims"
 
 var errMissingToken = errors.New("missing token")
 
@@ -27,7 +23,8 @@ type Claims struct {
 // (normal REST calls) or a `token` query parameter (the websocket
 // handshake — browsers can't set custom headers when opening a WS
 // connection, so the token has to travel some other way). On success it
-// stashes the user id under ws.CtxKeyUserID for downstream handlers.
+// stashes the user id and claims in context under contextutil's keys, so
+// any downstream handler can read them without importing this package.
 func AuthMiddleware(secret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,8 +46,8 @@ func AuthMiddleware(secret []byte) func(http.Handler) http.Handler {
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), ws.CtxKeyUserID, claims.Subject)
-			ctx = context.WithValue(ctx, ctxKeyClaims, claims)
+			ctx := context.WithValue(r.Context(), contextutil.UserIDKey, claims.Subject)
+			ctx = context.WithValue(ctx, contextutil.ClaimsKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

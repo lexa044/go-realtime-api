@@ -20,7 +20,7 @@ type OrderRepository interface {
 
 	// Update returns domain.ErrOrderNotFound if the order doesn't exist or
 	// is already soft-deleted.
-	Update(ctx context.Context, id, customerID, status string, total float64, updatedAt time.Time) (*domain.Order, error)
+	Update(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedAt time.Time) (*domain.Order, error)
 
 	// Delete performs a logical delete and returns domain.ErrOrderNotFound
 	// if the order doesn't exist or was already deleted.
@@ -49,9 +49,9 @@ type ListOrdersResult struct {
 }
 
 type OrderService interface {
-	PlaceOrder(ctx context.Context, customerID string, total float64) (*domain.Order, error)
+	PlaceOrder(ctx context.Context, customerID string, total domain.Money) (*domain.Order, error)
 	GetOrder(ctx context.Context, id string) (*domain.Order, error)
 	ListOrders(ctx context.Context, params ListOrdersParams) (*ListOrdersResult, error)
-	UpdateOrder(ctx context.Context, id, customerID, status string, total float64) (*domain.Order, error)
+	UpdateOrder(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money) (*domain.Order, error)
 	DeleteOrder(ctx context.Context, id string) error
 }

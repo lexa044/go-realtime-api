@@ -26,11 +26,11 @@ func NewOrderService(repo OrderRepository, publisher EventPublisher) OrderServic
 	return &orderService{repo: repo, publisher: publisher}
 }
 
-func (s *orderService) PlaceOrder(ctx context.Context, customerID string, total float64) (*domain.Order, error) {
+func (s *orderService) PlaceOrder(ctx context.Context, customerID string, total domain.Money) (*domain.Order, error) {
 	order := &domain.Order{
 		ID:         uuid.NewString(),
 		CustomerID: customerID,
-		Status:     "pending",
+		Status:     domain.OrderStatusPending,
 		Total:      total,
 		CreatedAt:  time.Now().UTC(),
 	}
@@ -77,7 +77,7 @@ func (s *orderService) ListOrders(ctx context.Context, params ListOrdersParams) 
 	}, nil
 }
 
-func (s *orderService) UpdateOrder(ctx context.Context, id, customerID, status string, total float64) (*domain.Order, error) {
+func (s *orderService) UpdateOrder(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money) (*domain.Order, error) {
 	order, err := s.repo.Update(ctx, id, customerID, status, total, time.Now().UTC())
 	if err != nil {
 		return nil, err

@@ -10,13 +10,14 @@ GO
 IF OBJECT_ID('dbo.Orders', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Orders (
-        ID          VARCHAR(36)   NOT NULL PRIMARY KEY,
-        CustomerID  VARCHAR(64)   NOT NULL,
-        Status      VARCHAR(32)   NOT NULL,
-        Total       DECIMAL(18,2) NOT NULL,
-        CreatedAt   DATETIME2     NOT NULL,
-        UpdatedAt   DATETIME2     NULL,
-        IsDeleted   BIT           NOT NULL CONSTRAINT DF_Orders_IsDeleted DEFAULT (0)
+        ID           VARCHAR(36)   NOT NULL PRIMARY KEY,
+        CustomerID   VARCHAR(64)   NOT NULL,
+        Status       VARCHAR(32)   NOT NULL,
+        Total        DECIMAL(18,2) NOT NULL,
+        CurrencyCode CHAR(3)       NOT NULL CONSTRAINT DF_Orders_CurrencyCode DEFAULT ('USD'),
+        CreatedAt    DATETIME2     NOT NULL,
+        UpdatedAt    DATETIME2     NULL,
+        IsDeleted    BIT           NOT NULL CONSTRAINT DF_Orders_IsDeleted DEFAULT (0)
     );
 
     -- Both indexes are filtered to IsDeleted = 0: they only index "live"
@@ -32,17 +33,18 @@ END
 GO
 
 CREATE OR ALTER PROCEDURE dbo.usp_Order_Create
-    @ID         VARCHAR(36),
-    @CustomerID VARCHAR(64),
-    @Status     VARCHAR(32),
-    @Total      DECIMAL(18,2),
-    @CreatedAt  DATETIME2
+    @ID           VARCHAR(36),
+    @CustomerID   VARCHAR(64),
+    @Status       VARCHAR(32),
+    @Total        DECIMAL(18,2),
+    @CurrencyCode CHAR(3),
+    @CreatedAt    DATETIME2
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    INSERT INTO dbo.Orders (ID, CustomerID, Status, Total, CreatedAt, UpdatedAt, IsDeleted)
-    VALUES (@ID, @CustomerID, @Status, @Total, @CreatedAt, NULL, 0);
+    INSERT INTO dbo.Orders (ID, CustomerID, Status, Total, CurrencyCode, CreatedAt, UpdatedAt, IsDeleted)
+    VALUES (@ID, @CustomerID, @Status, @Total, @CurrencyCode, @CreatedAt, NULL, 0);
 END
 GO
 
@@ -52,7 +54,7 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    SELECT ID, CustomerID, Status, Total, CreatedAt, UpdatedAt, IsDeleted
+    SELECT ID, CustomerID, Status, Total, CurrencyCode, CreatedAt, UpdatedAt, IsDeleted
     FROM dbo.Orders
     WHERE ID = @ID
       AND IsDeleted = 0;
@@ -81,6 +83,7 @@ BEGIN
         CustomerID,
         Status,
         Total,
+        CurrencyCode,
         CreatedAt,
         UpdatedAt,
         IsDeleted,
@@ -99,24 +102,26 @@ GO
 -- updated, 0 rows returned — for both a missing ID and an already-deleted
 -- one. The Go repository treats an empty result set as "not found".
 CREATE OR ALTER PROCEDURE dbo.usp_Order_Update
-    @ID         VARCHAR(36),
-    @CustomerID VARCHAR(64),
-    @Status     VARCHAR(32),
-    @Total      DECIMAL(18,2),
-    @UpdatedAt  DATETIME2
+    @ID           VARCHAR(36),
+    @CustomerID   VARCHAR(64),
+    @Status       VARCHAR(32),
+    @Total        DECIMAL(18,2),
+    @CurrencyCode CHAR(3),
+    @UpdatedAt    DATETIME2
 AS
 BEGIN
     SET NOCOUNT ON;
 
     UPDATE dbo.Orders
-    SET CustomerID = @CustomerID,
-        Status      = @Status,
-        Total       = @Total,
-        UpdatedAt   = @UpdatedAt
+    SET CustomerID   = @CustomerID,
+        Status        = @Status,
+        Total         = @Total,
+        CurrencyCode  = @CurrencyCode,
+        UpdatedAt     = @UpdatedAt
     WHERE ID = @ID
       AND IsDeleted = 0;
 
-    SELECT ID, CustomerID, Status, Total, CreatedAt, UpdatedAt, IsDeleted
+    SELECT ID, CustomerID, Status, Total, CurrencyCode, CreatedAt, UpdatedAt, IsDeleted
     FROM dbo.Orders
     WHERE ID = @ID
       AND IsDeleted = 0;

@@ -26,7 +26,8 @@ func NewRouter(orderHandler *OrderHandler, hub *ws.Hub, authMiddleware func(http
 		r.Delete("/orders/{id}", orderHandler.Delete)
 	})
 
-	// WS upgrade also needs auth, since CtxKeyUserID must be set beforehand.
+	// WS upgrade also needs auth, since contextutil.UserIDKey must be set
+	// beforehand.
 	r.With(authMiddleware).Get("/ws", ws.Handler(hub))
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {

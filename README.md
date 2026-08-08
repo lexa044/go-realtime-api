@@ -6,19 +6,54 @@ MSSQL for persistence and Redis for cross-instance pub/sub.
 ## Layers
 
 ```
-internal/domain          entities — no external imports
-internal/usecase          business logic + ports (interfaces)
-internal/adapter/http     REST handlers/router (implements driving side)
-internal/adapter/ws       websocket hub + client (implements driving side)
-internal/adapter/broker   redis publisher/subscriber (implements driven side)
-internal/adapter/repository  MSSQL repositories (implements driven side)
-internal/infrastructure   config, DI wiring (cmd/api/main.go)
+internal/domain              entities, enums, value objects, sentinel errors — no external imports
+  entities.go                 Order, Event
+  statuses.go                 OrderStatus enum (Pending, Shipped, Cancelled) + every future enum-like type
+  money.go                    Money value object (amount + currency, validated construction)
+  errors.go                   ErrOrderNotFound, ErrInvalidOrderStatus, ErrInvalidMoney
+
+internal/dto                 wire-format types — decoupled from domain's internal representation
+  request/                    PlaceOrderRequest, UpdateOrderRequest
+  response/                   OrderResponse, ListOrdersResponse
+
+internal/usecase              business logic + ports (interfaces)
+  ports.go                     OrderRepository, EventPublisher, OrderService
+  order_service.go
+
+internal/adapter              implements the ports; the only layer that touches transport/storage libraries
+  http/                        REST handlers, router, JWT middleware, domain<->dto mapper
+  ws/                          websocket hub + client (implements the driving side)
+  broker/                      Redis publisher/subscriber (implements the driven side)
+  repository/                  MSSQL repository — stored procedures only
+
+internal/infrastructure        config loading, MSSQL/Redis client construction (used only by cmd/api)
+  config/
+  db/
+
+internal/contextutil            shared context.Context key definitions, so no package
+                                 needs to import another package purely for a context key
 ```
 
-Dependency rule: arrows point inward. `domain` and `usecase` never import
-`gorilla/websocket`, `go-redis`, or `database/sql`. Swapping MSSQL for
-Postgres, or Redis for NATS, only touches the `adapter` package that
-implements the relevant port.
+Dependency rule: arrows point inward. `domain` imports nothing internal.
+`usecase` imports only `domain`. Every `adapter/*` package points inward
+toward `domain`/`usecase`/`contextutil`, never sideways into another
+adapter (except `http` importing `ws` to wire the WS route) and never into
+`infrastructure`. `cmd/api/main.go` is the only place that sees the whole
+graph — it's the dependency injection root. Swapping MSSQL for Postgres,
+or Redis for NATS, only touches the `adapter`/`infrastructure` files that
+implement the relevant port.
+
+## Domain types
+
+- **`OrderStatus`** (`internal/domain/statuses.go`) is a closed set —
+  `Pending`, `Shipped`, `Cancelled` — constructed only via
+  `ParseOrderStatus`, so an arbitrary string can never reach persistence as
+  a status. Invalid values are rejected with `400` at the HTTP boundary,
+  before they reach the usecase layer.
+- **`Money`** (`internal/domain/money.go`) pairs an amount with a currency
+  code and is constructed only via `NewMoney`, which rejects negative,
+  NaN/Inf, or unsupported-currency values and rounds to 2 decimal places.
+  Supported currencies: `USD`, `EUR`, `GBP` (extend the map as needed).
 
 ## API
 
@@ -32,20 +67,41 @@ All routes under `/api/v1` and `/ws` require a JWT (see Auth below).
 | PUT    | `/orders/{id}`    | Replace CustomerID/Status/Total on an order     |
 | DELETE | `/orders/{id}`    | Logical delete (sets `IsDeleted=1`, returns 204)|
 
+Request body for `POST`/`PUT` (`currency` optional, defaults to `USD`):
+
+```json
+{ "customer_id": "cust-1", "status": "shipped", "total": 42.5, "currency": "USD" }
+```
+
 `GET /orders` response shape:
 
 ```json
 {
-  "data": [ { "ID": "...", "CustomerID": "...", "Status": "pending", "Total": 42.5, "CreatedAt": "...", "UpdatedAt": null, "IsDeleted": false } ],
+  "data": [
+    {
+      "id": "...", "customer_id": "...", "status": "pending",
+      "total": 42.5, "currency": "USD",
+      "created_at": "...", "updated_at": null, "is_deleted": false
+    }
+  ],
   "page": 1,
   "page_size": 20,
   "total_count": 137
 }
 ```
 
+Response fields are defined in `internal/dto/response`, mapped from
+`domain.Order` by `internal/adapter/http/mapper.go` — the wire format is
+never `domain.Order` serialized directly, so a change to how `Money` or
+`OrderStatus` are represented internally doesn't automatically change the
+API contract.
+
 `page` defaults to 1, `page_size` defaults to 20 and is capped at 200 —
 both are clamped in `OrderService.ListOrders`, not just validated, so a
-bad or missing value degrades to a sane default rather than erroring.
+bad or missing value degrades to a sane default rather than erroring. An
+invalid `status` or `total`/`currency` on `POST`/`PUT`, by contrast, is
+rejected outright with `400` — `domain.ParseOrderStatus`/`domain.NewMoney`
+run in the HTTP handler before the usecase is ever called.
 
 Create, Update, and Delete each publish an event (`order.created`,
 `order.updated`, `order.deleted`) to Redis, which every connected
@@ -69,11 +125,18 @@ with named parameters. The procedures live in `db/init.sql`:
   removes the row, and returns `@@ROWCOUNT` so the caller can tell
   "deleted" apart from "already gone"
 
+The `Orders` table carries a `CurrencyCode` column alongside `Total`, one
+component of `domain.Money` each; the repository's `scanOrder` helper
+reassembles them into a validated `Money` (and `Status` into a validated
+`OrderStatus`) via the same constructors the rest of the app uses, so a row
+that somehow contains an invalid value surfaces as an error rather than
+entering the domain unchecked.
+
 This keeps query plans stable and reusable, lets a DBA tune or audit data
 access independently of application deploys, and limits the SQL injection
 surface to well-typed, named parameters rather than string concatenation.
 
-
+## Data flow
 
 1. Client `POST /api/v1/orders` → `OrderHandler` → `OrderService.PlaceOrder`
 2. Service writes to MSSQL via `OrderRepository`, then calls

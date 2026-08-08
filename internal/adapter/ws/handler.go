@@ -4,13 +4,9 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/lexa044/realtime-api/internal/contextutil"
 )
-
-// CtxKeyUserID is where auth middleware should stash the authenticated
-// user id before this handler runs.
-type ctxKey string
-
-const CtxKeyUserID ctxKey = "userID"
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -25,7 +21,7 @@ var upgrader = websocket.Upgrader{
 // cookie...) as middleware BEFORE this handler.
 func Handler(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, _ := r.Context().Value(CtxKeyUserID).(string)
+		userID, _ := r.Context().Value(contextutil.UserIDKey).(string)
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {

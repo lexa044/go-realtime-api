@@ -2,14 +2,17 @@ package domain
 
 import "time"
 
-// Order is a core business entity. It has zero knowledge of transport,
-// persistence or messaging concerns — that's the whole point of the
-// dependency rule in clean architecture.
+// This file holds every entity in the domain — currently just Order and
+// Event. Both have zero knowledge of transport, persistence, or messaging
+// concerns; that's the whole point of the dependency rule in clean
+// architecture.
+
+// Order is the core business entity.
 type Order struct {
 	ID         string
 	CustomerID string
-	Status     string
-	Total      float64
+	Status     OrderStatus
+	Total      Money
 	CreatedAt  time.Time
 	UpdatedAt  *time.Time // nil until the order is first updated or deleted
 	IsDeleted  bool

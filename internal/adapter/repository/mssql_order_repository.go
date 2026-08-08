@@ -29,13 +29,15 @@ func (r *OrderRepository) Create(ctx context.Context, o *domain.Order) error {
 		@CustomerID = @CustomerID,
 		@Status = @Status,
 		@Total = @Total,
+		@CurrencyCode = @CurrencyCode,
 		@CreatedAt = @CreatedAt;`
 
 	if _, err := r.db.ExecContext(ctx, q,
 		sql.Named("ID", o.ID),
 		sql.Named("CustomerID", o.CustomerID),
-		sql.Named("Status", o.Status),
-		sql.Named("Total", o.Total),
+		sql.Named("Status", o.Status.String()),
+		sql.Named("Total", o.Total.Amount()),
+		sql.Named("CurrencyCode", o.Total.Currency()),
 		sql.Named("CreatedAt", o.CreatedAt),
 	); err != nil {
 		return fmt.Errorf("create order %s: %w", o.ID, err)
@@ -47,17 +49,14 @@ func (r *OrderRepository) GetByID(ctx context.Context, id string) (*domain.Order
 	const q = `EXEC dbo.usp_Order_GetByID @ID = @ID;`
 
 	row := r.db.QueryRowContext(ctx, q, sql.Named("ID", id))
-
-	var o domain.Order
-	var updatedAt sql.NullTime // UpdatedAt is NULL until the row is first touched
-	if err := row.Scan(&o.ID, &o.CustomerID, &o.Status, &o.Total, &o.CreatedAt, &updatedAt, &o.IsDeleted); err != nil {
+	order, err := scanOrder(row.Scan)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.ErrOrderNotFound
 		}
 		return nil, fmt.Errorf("get order %s: %w", id, err)
 	}
-	o.UpdatedAt = nullTimeToPtr(updatedAt)
-	return &o, nil
+	return order, nil
 }
 
 // List calls dbo.usp_Order_List, which returns one result set: each row
@@ -93,13 +92,11 @@ func (r *OrderRepository) List(ctx context.Context, customerID string, page, pag
 		total  int
 	)
 	for rows.Next() {
-		var o domain.Order
-		var updatedAt sql.NullTime
-		if err := rows.Scan(&o.ID, &o.CustomerID, &o.Status, &o.Total, &o.CreatedAt, &updatedAt, &o.IsDeleted, &total); err != nil {
+		order, err := scanOrder(rows.Scan, &total)
+		if err != nil {
 			return nil, 0, fmt.Errorf("list orders: scan row: %w", err)
 		}
-		o.UpdatedAt = nullTimeToPtr(updatedAt)
-		orders = append(orders, o)
+		orders = append(orders, *order)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("list orders: %w", err)
@@ -112,32 +109,32 @@ func (r *OrderRepository) List(ctx context.Context, customerID string, page, pag
 // so it's a no-op — zero rows updated, zero rows returned — for both a
 // missing ID and an already-deleted one. An empty result set here always
 // means domain.ErrOrderNotFound.
-func (r *OrderRepository) Update(ctx context.Context, id, customerID, status string, total float64, updatedAt time.Time) (*domain.Order, error) {
+func (r *OrderRepository) Update(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedAt time.Time) (*domain.Order, error) {
 	const q = `EXEC dbo.usp_Order_Update
 		@ID = @ID,
 		@CustomerID = @CustomerID,
 		@Status = @Status,
 		@Total = @Total,
+		@CurrencyCode = @CurrencyCode,
 		@UpdatedAt = @UpdatedAt;`
 
 	row := r.db.QueryRowContext(ctx, q,
 		sql.Named("ID", id),
 		sql.Named("CustomerID", customerID),
-		sql.Named("Status", status),
-		sql.Named("Total", total),
+		sql.Named("Status", status.String()),
+		sql.Named("Total", total.Amount()),
+		sql.Named("CurrencyCode", total.Currency()),
 		sql.Named("UpdatedAt", updatedAt),
 	)
 
-	var o domain.Order
-	var gotUpdatedAt sql.NullTime
-	if err := row.Scan(&o.ID, &o.CustomerID, &o.Status, &o.Total, &o.CreatedAt, &gotUpdatedAt, &o.IsDeleted); err != nil {
+	order, err := scanOrder(row.Scan)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.ErrOrderNotFound
 		}
 		return nil, fmt.Errorf("update order %s: %w", id, err)
 	}
-	o.UpdatedAt = nullTimeToPtr(gotUpdatedAt)
-	return &o, nil
+	return order, nil
 }
 
 // Delete calls dbo.usp_Order_Delete, a logical delete: the proc flags
@@ -160,6 +157,47 @@ func (r *OrderRepository) Delete(ctx context.Context, id string, deletedAt time.
 		return domain.ErrOrderNotFound
 	}
 	return nil
+}
+
+// scanOrder reads one row shaped like the result sets returned by
+// usp_Order_GetByID/List/Update into a domain.Order, translating the raw
+// Status/Total/CurrencyCode columns into their validated domain types
+// (OrderStatus, Money) via the same constructors the rest of the app uses
+// — a row that somehow contains an invalid status or amount surfaces as an
+// error here rather than silently entering the domain unchecked.
+//
+// extra accepts additional destination pointers appended after the fixed
+// Order columns, for callers (List) whose query returns extra columns like
+// TotalCount.
+func scanOrder(scan func(dest ...any) error, extra ...any) (*domain.Order, error) {
+	var (
+		o            domain.Order
+		statusRaw    string
+		amount       float64
+		currencyCode string
+		updatedAt    sql.NullTime
+	)
+
+	dest := []any{&o.ID, &o.CustomerID, &statusRaw, &amount, &currencyCode, &o.CreatedAt, &updatedAt, &o.IsDeleted}
+	dest = append(dest, extra...)
+
+	if err := scan(dest...); err != nil {
+		return nil, err
+	}
+
+	status, err := domain.ParseOrderStatus(statusRaw)
+	if err != nil {
+		return nil, fmt.Errorf("order %s: %w", o.ID, err)
+	}
+	total, err := domain.NewMoney(amount, currencyCode)
+	if err != nil {
+		return nil, fmt.Errorf("order %s: %w", o.ID, err)
+	}
+
+	o.Status = status
+	o.Total = total
+	o.UpdatedAt = nullTimeToPtr(updatedAt)
+	return &o, nil
 }
 
 // nullTimeToPtr converts a nullable DB column into domain's preferred

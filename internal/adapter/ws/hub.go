@@ -3,8 +3,9 @@ package ws
 import "sync"
 
 // Hub keeps track of every websocket session connected to THIS process and
-// fans out messages to all of them. It has no idea where messages come from
-// (REST call, cron job, Redis...) — that's the publisher/subscriber's job.
+// fans out messages to all of them. It has no idea where messages come
+// from (REST call, cron job, Redis...) — that's the publisher/subscriber's
+// job.
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
