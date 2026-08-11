@@ -30,7 +30,9 @@ func (r *OrderRepository) Create(ctx context.Context, o *domain.Order) error {
 		@Status = @Status,
 		@Total = @Total,
 		@CurrencyCode = @CurrencyCode,
-		@CreatedAt = @CreatedAt;`
+		@CreatedAt = @CreatedAt,
+		@CreatedBy = @CreatedBy,
+		@UpdatedBy = @UpdatedBy;`
 
 	if _, err := r.db.ExecContext(ctx, q,
 		sql.Named("ID", o.ID),
@@ -39,6 +41,8 @@ func (r *OrderRepository) Create(ctx context.Context, o *domain.Order) error {
 		sql.Named("Total", o.Total.Amount()),
 		sql.Named("CurrencyCode", o.Total.Currency()),
 		sql.Named("CreatedAt", o.CreatedAt),
+		sql.Named("CreatedBy", o.CreatedBy),
+		sql.Named("UpdatedBy", o.UpdatedBy),
 	); err != nil {
 		return fmt.Errorf("create order %s: %w", o.ID, err)
 	}
@@ -109,13 +113,14 @@ func (r *OrderRepository) List(ctx context.Context, customerID string, page, pag
 // so it's a no-op — zero rows updated, zero rows returned — for both a
 // missing ID and an already-deleted one. An empty result set here always
 // means domain.ErrOrderNotFound.
-func (r *OrderRepository) Update(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedAt time.Time) (*domain.Order, error) {
+func (r *OrderRepository) Update(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedBy string, updatedAt time.Time) (*domain.Order, error) {
 	const q = `EXEC dbo.usp_Order_Update
 		@ID = @ID,
 		@CustomerID = @CustomerID,
 		@Status = @Status,
 		@Total = @Total,
 		@CurrencyCode = @CurrencyCode,
+		@UpdatedBy = @UpdatedBy,
 		@UpdatedAt = @UpdatedAt;`
 
 	row := r.db.QueryRowContext(ctx, q,
@@ -124,6 +129,7 @@ func (r *OrderRepository) Update(ctx context.Context, id, customerID string, sta
 		sql.Named("Status", status.String()),
 		sql.Named("Total", total.Amount()),
 		sql.Named("CurrencyCode", total.Currency()),
+		sql.Named("UpdatedBy", updatedBy),
 		sql.Named("UpdatedAt", updatedAt),
 	)
 
@@ -138,14 +144,16 @@ func (r *OrderRepository) Update(ctx context.Context, id, customerID string, sta
 }
 
 // Delete calls dbo.usp_Order_Delete, a logical delete: the proc flags
-// IsDeleted rather than removing the row, and returns the number of rows
-// its UPDATE actually touched so we can tell "deleted" apart from
+// IsDeleted rather than removing the row, records deletedBy as UpdatedBy
+// (a delete is still a modification of the row), and returns the number
+// of rows its UPDATE actually touched so we can tell "deleted" apart from
 // "already gone".
-func (r *OrderRepository) Delete(ctx context.Context, id string, deletedAt time.Time) error {
-	const q = `EXEC dbo.usp_Order_Delete @ID = @ID, @DeletedAt = @DeletedAt;`
+func (r *OrderRepository) Delete(ctx context.Context, id, deletedBy string, deletedAt time.Time) error {
+	const q = `EXEC dbo.usp_Order_Delete @ID = @ID, @UpdatedBy = @UpdatedBy, @DeletedAt = @DeletedAt;`
 
 	row := r.db.QueryRowContext(ctx, q,
 		sql.Named("ID", id),
+		sql.Named("UpdatedBy", deletedBy),
 		sql.Named("DeletedAt", deletedAt),
 	)
 
@@ -178,7 +186,10 @@ func scanOrder(scan func(dest ...any) error, extra ...any) (*domain.Order, error
 		updatedAt    sql.NullTime
 	)
 
-	dest := []any{&o.ID, &o.CustomerID, &statusRaw, &amount, &currencyCode, &o.CreatedAt, &updatedAt, &o.IsDeleted}
+	dest := []any{
+		&o.ID, &o.CustomerID, &statusRaw, &amount, &currencyCode,
+		&o.CreatedAt, &updatedAt, &o.IsDeleted, &o.CreatedBy, &o.UpdatedBy,
+	}
 	dest = append(dest, extra...)
 
 	if err := scan(dest...); err != nil {

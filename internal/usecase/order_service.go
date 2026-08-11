@@ -26,13 +26,15 @@ func NewOrderService(repo OrderRepository, publisher EventPublisher) OrderServic
 	return &orderService{repo: repo, publisher: publisher}
 }
 
-func (s *orderService) PlaceOrder(ctx context.Context, customerID string, total domain.Money) (*domain.Order, error) {
+func (s *orderService) PlaceOrder(ctx context.Context, actorUserID, customerID string, total domain.Money) (*domain.Order, error) {
 	order := &domain.Order{
 		ID:         uuid.NewString(),
 		CustomerID: customerID,
 		Status:     domain.OrderStatusPending,
 		Total:      total,
 		CreatedAt:  time.Now().UTC(),
+		CreatedBy:  actorUserID,
+		UpdatedBy:  actorUserID,
 	}
 
 	if err := s.repo.Create(ctx, order); err != nil {
@@ -77,8 +79,8 @@ func (s *orderService) ListOrders(ctx context.Context, params ListOrdersParams) 
 	}, nil
 }
 
-func (s *orderService) UpdateOrder(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money) (*domain.Order, error) {
-	order, err := s.repo.Update(ctx, id, customerID, status, total, time.Now().UTC())
+func (s *orderService) UpdateOrder(ctx context.Context, actorUserID, id, customerID string, status domain.OrderStatus, total domain.Money) (*domain.Order, error) {
+	order, err := s.repo.Update(ctx, id, customerID, status, total, actorUserID, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -89,8 +91,8 @@ func (s *orderService) UpdateOrder(ctx context.Context, id, customerID string, s
 
 // DeleteOrder is a logical delete — the repository flags the row rather
 // than removing it, so order history survives for audit/reporting.
-func (s *orderService) DeleteOrder(ctx context.Context, id string) error {
-	if err := s.repo.Delete(ctx, id, time.Now().UTC()); err != nil {
+func (s *orderService) DeleteOrder(ctx context.Context, actorUserID, id string) error {
+	if err := s.repo.Delete(ctx, id, actorUserID, time.Now().UTC()); err != nil {
 		return err
 	}
 

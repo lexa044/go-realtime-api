@@ -19,6 +19,8 @@ func toOrderResponse(o *domain.Order) response.OrderResponse {
 		CreatedAt:  o.CreatedAt,
 		UpdatedAt:  o.UpdatedAt,
 		IsDeleted:  o.IsDeleted,
+		CreatedBy:  o.CreatedBy,
+		UpdatedBy:  o.UpdatedBy,
 	}
 }
 

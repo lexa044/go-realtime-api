@@ -54,6 +54,12 @@ services:
       MSSQL_DSN: "sqlserver://sa:YourStrong!Passw0rd@mssql:1433?database=appdb"
       REDIS_ADDR: "redis:6379"
       JWT_SECRET: "dev-secret-change-me"
+      ACCESS_TOKEN_TTL: "15m"
+      REFRESH_TOKEN_TTL: "168h"
+      LOGIN_RATE_LIMIT: "5"
+      LOGIN_RATE_WINDOW: "1m"
+      AUTH_RATE_LIMIT: "20"
+      AUTH_RATE_WINDOW: "1m"
     ports:
       - "8080:8080"
     depends_on:
@@ -63,6 +69,25 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  # Dev-only: provisions (or resets the password of) a user directly
+  # against the database, since there's no self-serve registration
+  # endpoint. Not part of the default `up` graph — run explicitly:
+  #   docker compose --profile tools run --rm seed
+  #   docker compose --profile tools run --rm seed bob 'Secret123!'
+  seed:
+    image: golang:1.26-alpine
+    working_dir: /src
+    volumes:
+      - .:/src
+    environment:
+      MSSQL_DSN: "sqlserver://sa:YourStrong!Passw0rd@mssql:1433?database=appdb"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    entrypoint: ["go", "run", "./cmd/seeduser"]
+    command: ["admin", "ChangeMe123!"]
+    profiles: ["tools"]
 
 volumes:
   mssql-data:

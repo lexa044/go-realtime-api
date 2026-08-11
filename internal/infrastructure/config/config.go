@@ -4,15 +4,23 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	HTTPAddr  string
-	MSSQLDSN  string
-	RedisAddr string
-	RedisPass string
-	JWTSecret string
+	HTTPAddr          string
+	MSSQLDSN          string
+	RedisAddr         string
+	RedisPass         string
+	JWTSecret         string
+	AccessTokenTTL    time.Duration
+	RefreshTokenTTL   time.Duration
+	LoginRateLimit    int           // max /auth/login attempts per LoginRateWindow, per client IP
+	LoginRateWindow   time.Duration
+	AuthRateLimit     int           // max /auth/refresh + /auth/logout calls per AuthRateWindow, per client IP
+	AuthRateWindow    time.Duration
 }
 
 // Load builds the Config from environment variables, optionally seeded by a
@@ -26,12 +34,44 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("reading .env file: %w", err)
 	}
 
+	accessTTL, err := time.ParseDuration(getenv("ACCESS_TOKEN_TTL", "15m"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid ACCESS_TOKEN_TTL: %w", err)
+	}
+	refreshTTL, err := time.ParseDuration(getenv("REFRESH_TOKEN_TTL", "168h"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid REFRESH_TOKEN_TTL: %w", err)
+	}
+
+	loginRateLimit, err := strconv.Atoi(getenv("LOGIN_RATE_LIMIT", "5"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid LOGIN_RATE_LIMIT: %w", err)
+	}
+	loginRateWindow, err := time.ParseDuration(getenv("LOGIN_RATE_WINDOW", "1m"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid LOGIN_RATE_WINDOW: %w", err)
+	}
+	authRateLimit, err := strconv.Atoi(getenv("AUTH_RATE_LIMIT", "20"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid AUTH_RATE_LIMIT: %w", err)
+	}
+	authRateWindow, err := time.ParseDuration(getenv("AUTH_RATE_WINDOW", "1m"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid AUTH_RATE_WINDOW: %w", err)
+	}
+
 	cfg := &Config{
-		HTTPAddr:  getenv("HTTP_ADDR", ":8080"),
-		MSSQLDSN:  getenv("MSSQL_DSN", ""),
-		RedisAddr: getenv("REDIS_ADDR", "localhost:6379"),
-		RedisPass: getenv("REDIS_PASSWORD", ""),
-		JWTSecret: getenv("JWT_SECRET", ""),
+		HTTPAddr:        getenv("HTTP_ADDR", ":8080"),
+		MSSQLDSN:        getenv("MSSQL_DSN", ""),
+		RedisAddr:       getenv("REDIS_ADDR", "localhost:6379"),
+		RedisPass:       getenv("REDIS_PASSWORD", ""),
+		JWTSecret:       getenv("JWT_SECRET", ""),
+		AccessTokenTTL:  accessTTL,
+		RefreshTokenTTL: refreshTTL,
+		LoginRateLimit:  loginRateLimit,
+		LoginRateWindow: loginRateWindow,
+		AuthRateLimit:   authRateLimit,
+		AuthRateWindow:  authRateWindow,
 	}
 
 	if cfg.MSSQLDSN == "" {

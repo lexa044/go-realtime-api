@@ -12,7 +12,9 @@ import (
 
 	"github.com/lexa044/realtime-api/internal/adapter/broker"
 	httpadapter "github.com/lexa044/realtime-api/internal/adapter/http"
+	"github.com/lexa044/realtime-api/internal/adapter/ratelimit"
 	"github.com/lexa044/realtime-api/internal/adapter/repository"
+	"github.com/lexa044/realtime-api/internal/adapter/security"
 	"github.com/lexa044/realtime-api/internal/adapter/ws"
 	"github.com/lexa044/realtime-api/internal/infrastructure/config"
 	infradb "github.com/lexa044/realtime-api/internal/infrastructure/db"
@@ -49,6 +51,20 @@ func main() {
 	orderService := usecase.NewOrderService(orderRepo, publisher)
 	orderHandler := httpadapter.NewOrderHandler(orderService)
 
+	userRepo := repository.NewUserRepository(db)
+	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
+	passwordHasher := security.NewBcryptHasher()
+	tokenIssuer := security.NewJWTTokenIssuer([]byte(cfg.JWTSecret), cfg.AccessTokenTTL)
+	authService := usecase.NewAuthService(userRepo, refreshTokenRepo, passwordHasher, tokenIssuer, cfg.RefreshTokenTTL)
+	authHandler := httpadapter.NewAuthHandler(authService)
+
+	userService := usecase.NewUserService(userRepo)
+	userHandler := httpadapter.NewUserHandler(userService)
+
+	limiter := ratelimit.NewRedisLimiter(rdb)
+	loginRateLimit := httpadapter.RateLimitMiddleware(limiter, "login", cfg.LoginRateLimit, cfg.LoginRateWindow)
+	authRateLimit := httpadapter.RateLimitMiddleware(limiter, "auth", cfg.AuthRateLimit, cfg.AuthRateWindow)
+
 	hub := ws.NewHub()
 	go hub.Run()
 
@@ -63,7 +79,15 @@ func main() {
 		}
 	}()
 
-	router := httpadapter.NewRouter(orderHandler, hub, httpadapter.AuthMiddleware([]byte(cfg.JWTSecret)))
+	router := httpadapter.NewRouter(
+		orderHandler,
+		authHandler,
+		userHandler,
+		hub,
+		httpadapter.AuthMiddleware([]byte(cfg.JWTSecret)),
+		loginRateLimit,
+		authRateLimit,
+	)
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,

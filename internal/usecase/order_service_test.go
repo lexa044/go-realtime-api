@@ -17,8 +17,8 @@ type fakeOrderRepository struct {
 	createFn func(ctx context.Context, o *domain.Order) error
 	getFn    func(ctx context.Context, id string) (*domain.Order, error)
 	listFn   func(ctx context.Context, customerID string, page, pageSize int) ([]domain.Order, int, error)
-	updateFn func(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedAt time.Time) (*domain.Order, error)
-	deleteFn func(ctx context.Context, id string, deletedAt time.Time) error
+	updateFn func(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedBy string, updatedAt time.Time) (*domain.Order, error)
+	deleteFn func(ctx context.Context, id, deletedBy string, deletedAt time.Time) error
 
 	created []*domain.Order
 }
@@ -45,16 +45,16 @@ func (f *fakeOrderRepository) List(ctx context.Context, customerID string, page,
 	return nil, 0, errors.New("fakeOrderRepository.List not stubbed")
 }
 
-func (f *fakeOrderRepository) Update(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedAt time.Time) (*domain.Order, error) {
+func (f *fakeOrderRepository) Update(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedBy string, updatedAt time.Time) (*domain.Order, error) {
 	if f.updateFn != nil {
-		return f.updateFn(ctx, id, customerID, status, total, updatedAt)
+		return f.updateFn(ctx, id, customerID, status, total, updatedBy, updatedAt)
 	}
 	return nil, errors.New("fakeOrderRepository.Update not stubbed")
 }
 
-func (f *fakeOrderRepository) Delete(ctx context.Context, id string, deletedAt time.Time) error {
+func (f *fakeOrderRepository) Delete(ctx context.Context, id, deletedBy string, deletedAt time.Time) error {
 	if f.deleteFn != nil {
-		return f.deleteFn(ctx, id, deletedAt)
+		return f.deleteFn(ctx, id, deletedBy, deletedAt)
 	}
 	return errors.New("fakeOrderRepository.Delete not stubbed")
 }
@@ -82,7 +82,7 @@ func TestPlaceOrder_Success(t *testing.T) {
 	svc := usecase.NewOrderService(repo, pub)
 
 	total := domain.MustMoney(42.5, "USD")
-	order, err := svc.PlaceOrder(context.Background(), "cust-1", total)
+	order, err := svc.PlaceOrder(context.Background(), "user-1", "cust-1", total)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,6 +97,9 @@ func TestPlaceOrder_Success(t *testing.T) {
 	}
 	if order.ID == "" {
 		t.Fatal("expected a generated ID")
+	}
+	if order.CreatedBy != "user-1" || order.UpdatedBy != "user-1" {
+		t.Fatalf("expected CreatedBy/UpdatedBy set to the acting user, got %q/%q", order.CreatedBy, order.UpdatedBy)
 	}
 
 	if len(repo.created) != 1 {
@@ -129,7 +132,7 @@ func TestPlaceOrder_RepositoryError_SkipsPublish(t *testing.T) {
 	pub := &fakeEventPublisher{}
 	svc := usecase.NewOrderService(repo, pub)
 
-	_, err := svc.PlaceOrder(context.Background(), "cust-1", domain.MustMoney(10, "USD"))
+	_, err := svc.PlaceOrder(context.Background(), "user-1", "cust-1", domain.MustMoney(10, "USD"))
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected repository error to propagate, got %v", err)
 	}
@@ -149,7 +152,7 @@ func TestPlaceOrder_PublishError_StillSucceeds(t *testing.T) {
 	}
 	svc := usecase.NewOrderService(repo, pub)
 
-	order, err := svc.PlaceOrder(context.Background(), "cust-1", domain.MustMoney(10, "USD"))
+	order, err := svc.PlaceOrder(context.Background(), "user-1", "cust-1", domain.MustMoney(10, "USD"))
 	if err != nil {
 		t.Fatalf("expected PlaceOrder to succeed even if publish fails, got %v", err)
 	}
@@ -245,27 +248,33 @@ func TestListOrders_DefaultsPageSize(t *testing.T) {
 	}
 }
 
-func TestUpdateOrder_PublishesEvent(t *testing.T) {
+func TestUpdateOrder_PassesActorAndPublishesEvent(t *testing.T) {
 	updated := &domain.Order{
 		ID:         "abc",
 		CustomerID: "cust-2",
 		Status:     domain.OrderStatusShipped,
 		Total:      domain.MustMoney(99, "USD"),
+		UpdatedBy:  "user-2",
 	}
+	var gotUpdatedBy string
 	repo := &fakeOrderRepository{
-		updateFn: func(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedAt time.Time) (*domain.Order, error) {
+		updateFn: func(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedBy string, updatedAt time.Time) (*domain.Order, error) {
+			gotUpdatedBy = updatedBy
 			return updated, nil
 		},
 	}
 	pub := &fakeEventPublisher{}
 	svc := usecase.NewOrderService(repo, pub)
 
-	got, err := svc.UpdateOrder(context.Background(), "abc", "cust-2", domain.OrderStatusShipped, domain.MustMoney(99, "USD"))
+	got, err := svc.UpdateOrder(context.Background(), "user-2", "abc", "cust-2", domain.OrderStatusShipped, domain.MustMoney(99, "USD"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != updated {
 		t.Fatal("expected the order returned by the repository")
+	}
+	if gotUpdatedBy != "user-2" {
+		t.Fatalf("expected updatedBy %q passed to repository, got %q", "user-2", gotUpdatedBy)
 	}
 	if len(pub.published) != 1 || pub.published[0].Type != domain.EventOrderUpdated {
 		t.Fatalf("expected one order.updated event, got %+v", pub.published)
@@ -274,14 +283,14 @@ func TestUpdateOrder_PublishesEvent(t *testing.T) {
 
 func TestUpdateOrder_NotFound_SkipsPublish(t *testing.T) {
 	repo := &fakeOrderRepository{
-		updateFn: func(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedAt time.Time) (*domain.Order, error) {
+		updateFn: func(ctx context.Context, id, customerID string, status domain.OrderStatus, total domain.Money, updatedBy string, updatedAt time.Time) (*domain.Order, error) {
 			return nil, domain.ErrOrderNotFound
 		},
 	}
 	pub := &fakeEventPublisher{}
 	svc := usecase.NewOrderService(repo, pub)
 
-	_, err := svc.UpdateOrder(context.Background(), "missing", "cust-1", domain.OrderStatusShipped, domain.MustMoney(10, "USD"))
+	_, err := svc.UpdateOrder(context.Background(), "user-1", "missing", "cust-1", domain.OrderStatusShipped, domain.MustMoney(10, "USD"))
 	if !errors.Is(err, domain.ErrOrderNotFound) {
 		t.Fatalf("expected ErrOrderNotFound, got %v", err)
 	}
@@ -290,15 +299,22 @@ func TestUpdateOrder_NotFound_SkipsPublish(t *testing.T) {
 	}
 }
 
-func TestDeleteOrder_PublishesEvent(t *testing.T) {
+func TestDeleteOrder_PassesActorAndPublishesEvent(t *testing.T) {
+	var gotDeletedBy string
 	repo := &fakeOrderRepository{
-		deleteFn: func(ctx context.Context, id string, deletedAt time.Time) error { return nil },
+		deleteFn: func(ctx context.Context, id, deletedBy string, deletedAt time.Time) error {
+			gotDeletedBy = deletedBy
+			return nil
+		},
 	}
 	pub := &fakeEventPublisher{}
 	svc := usecase.NewOrderService(repo, pub)
 
-	if err := svc.DeleteOrder(context.Background(), "abc"); err != nil {
+	if err := svc.DeleteOrder(context.Background(), "user-3", "abc"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotDeletedBy != "user-3" {
+		t.Fatalf("expected deletedBy %q passed to repository, got %q", "user-3", gotDeletedBy)
 	}
 	if len(pub.published) != 1 || pub.published[0].Type != domain.EventOrderDeleted {
 		t.Fatalf("expected one order.deleted event, got %+v", pub.published)
@@ -307,12 +323,12 @@ func TestDeleteOrder_PublishesEvent(t *testing.T) {
 
 func TestDeleteOrder_NotFound_SkipsPublish(t *testing.T) {
 	repo := &fakeOrderRepository{
-		deleteFn: func(ctx context.Context, id string, deletedAt time.Time) error { return domain.ErrOrderNotFound },
+		deleteFn: func(ctx context.Context, id, deletedBy string, deletedAt time.Time) error { return domain.ErrOrderNotFound },
 	}
 	pub := &fakeEventPublisher{}
 	svc := usecase.NewOrderService(repo, pub)
 
-	err := svc.DeleteOrder(context.Background(), "missing")
+	err := svc.DeleteOrder(context.Background(), "user-1", "missing")
 	if !errors.Is(err, domain.ErrOrderNotFound) {
 		t.Fatalf("expected ErrOrderNotFound, got %v", err)
 	}

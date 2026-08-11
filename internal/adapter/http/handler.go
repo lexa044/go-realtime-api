@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/lexa044/realtime-api/internal/contextutil"
 	"github.com/lexa044/realtime-api/internal/domain"
 	"github.com/lexa044/realtime-api/internal/dto/request"
 	"github.com/lexa044/realtime-api/internal/dto/response"
@@ -28,6 +29,14 @@ func NewOrderHandler(svc usecase.OrderService) *OrderHandler {
 	return &OrderHandler{svc: svc}
 }
 
+// actorFromContext reads the authenticated user's ID, set by AuthMiddleware
+// for every request that reaches these handlers (all of them require
+// auth). Every order write threads this through as CreatedBy/UpdatedBy.
+func actorFromContext(r *http.Request) string {
+	userID, _ := r.Context().Value(contextutil.UserIDKey).(string)
+	return userID
+}
+
 func (h *OrderHandler) Place(w http.ResponseWriter, r *http.Request) {
 	var req request.PlaceOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -45,7 +54,7 @@ func (h *OrderHandler) Place(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.svc.PlaceOrder(r.Context(), req.CustomerID, total)
+	order, err := h.svc.PlaceOrder(r.Context(), actorFromContext(r), req.CustomerID, total)
 	if err != nil {
 		http.Error(w, "could not place order", http.StatusInternalServerError)
 		return
@@ -133,7 +142,7 @@ func (h *OrderHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.svc.UpdateOrder(r.Context(), id, req.CustomerID, status, total)
+	order, err := h.svc.UpdateOrder(r.Context(), actorFromContext(r), id, req.CustomerID, status, total)
 	if err != nil {
 		if errors.Is(err, domain.ErrOrderNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -152,7 +161,7 @@ func (h *OrderHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *OrderHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	if err := h.svc.DeleteOrder(r.Context(), id); err != nil {
+	if err := h.svc.DeleteOrder(r.Context(), actorFromContext(r), id); err != nil {
 		if errors.Is(err, domain.ErrOrderNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return

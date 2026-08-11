@@ -16,6 +16,8 @@ type OrderResponse struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 	IsDeleted  bool       `json:"is_deleted"`
+	CreatedBy  string     `json:"created_by"` // user ID of whoever created the order
+	UpdatedBy  string     `json:"updated_by"` // user ID of whoever last created/updated/deleted it
 }
 
 // ListOrdersResponse is the wire shape for GET /orders.

@@ -6,25 +6,20 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
-
+	"github.com/lexa044/realtime-api/internal/adapter/security"
 	"github.com/lexa044/realtime-api/internal/contextutil"
 )
 
 var errMissingToken = errors.New("missing token")
 
-// Claims is the JWT payload this API expects. Adjust to match your issuer
-// (an IdP, a separate auth service, etc). "sub" carries the user id.
-type Claims struct {
-	jwt.RegisteredClaims
-}
-
-// AuthMiddleware validates a JWT from either the Authorization header
-// (normal REST calls) or a `token` query parameter (the websocket
+// AuthMiddleware validates an access token from either the Authorization
+// header (normal REST calls) or a `token` query parameter (the websocket
 // handshake — browsers can't set custom headers when opening a WS
-// connection, so the token has to travel some other way). On success it
-// stashes the user id and claims in context under contextutil's keys, so
-// any downstream handler can read them without importing this package.
+// connection, so the token has to travel some other way). Verification
+// itself lives in adapter/security, shared with the code that issues these
+// tokens in the first place, so signing and verifying can never drift out
+// of sync. On success, the user ID is stashed under contextutil.UserIDKey
+// for downstream handlers.
 func AuthMiddleware(secret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,20 +29,13 @@ func AuthMiddleware(secret []byte) func(http.Handler) http.Handler {
 				return
 			}
 
-			claims := &Claims{}
-			token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, errors.New("unexpected signing method")
-				}
-				return secret, nil
-			})
-			if err != nil || !token.Valid || claims.Subject == "" {
+			userID, err := security.VerifyAccessToken(secret, tokenString)
+			if err != nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), contextutil.UserIDKey, claims.Subject)
-			ctx = context.WithValue(ctx, contextutil.ClaimsKey, claims)
+			ctx := context.WithValue(r.Context(), contextutil.UserIDKey, userID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
